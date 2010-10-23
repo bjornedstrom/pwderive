@@ -1,0 +1,186 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2010 Björn Edström <be@bjrn.se>
+#
+# Permission is hereby granted, free of charge, to any person
+# obtaining a copy of this software and associated documentation files
+# (the "Software"), to deal in the Software without restriction,
+# including without limitation the rights to use, copy, modify, merge,
+# publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so,
+# subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+""" given a master password, derive a new password for the specified
+site.
+
+This can be used for example to generate passwords for unimportant
+websites etc, while only having to remember a single password.
+
+Avoid using this for important sites.
+
+Examples:
+
+  $ pwderive www.someforum.com
+
+  This will prompt you for your master password, and derive a specific
+  password for "www.someforum.com".
+
+  $ pwderive --simple --length=8 my_spam_email
+
+  This will create a password of length 8 without any special
+  characters (only a-z, A-Z, 0-9).
+
+  $ pwderive my_spam_email --clipboard
+
+  This will write the password to the clipboard. This option is only
+  available of you have pygtk installed.
+"""
+
+import getpass
+import hashlib
+import hmac
+import math
+import optparse
+import struct
+import sys
+
+try:
+    import pygtk
+    pygtk.require('2.0')
+    import gtk
+    HAS_GTK = True
+except ImportError:
+    HAS_GTK = False
+
+
+def bytes_to_password(bytes, simple):
+    '''Map a string of bytes to a string of printable characters.
+    '''
+
+    VALID = '''abcdefghijklmnopqrstuvwxyz
+               ABCDEFGHIJKLMNOPQRSTUVWXYZ
+               0123456789'''
+    if not simple:
+        VALID += '''!"#%&/()=?@$[]}{*.:,;'''
+
+    VALID = VALID.replace('\n', '').replace(' ', '')
+
+    def func(b):
+        # Note that 256 % len(VALID) characters will be
+        # overrepresented (in this case the characters ("a", "l", "x",
+        # "J", "V", "7", "?" if simple is False). For a better
+        # distribution, change the number of valid characters to 64 or
+        # 128.
+        return VALID[int((ord(b) / 256.0) * len(VALID))]
+
+    return ''.join(map(func, bytes))
+
+
+def xor_string(str1, str2):
+    '''Xor two byte strings.
+    '''
+
+    # TODO: slow!
+    str3 = ''
+    for i in xrange(len(str1)):
+        str3 += chr(ord(str1[i]) ^ ord(str2[i]))
+    return str3
+
+
+def hmac_sha1(key, message):
+    '''Calculates HMAC-SHA1.
+    '''
+
+    return hmac.HMAC(key, message, hashlib.sha1).digest()
+
+
+def pbkdf2(hmacfunc, password, salt, iterations, derivedlen):
+    '''Reference implementation of PKBDF2 from PKCS5.
+    '''
+
+    hLen = len(hmacfunc('', '')) # digest size
+    l = int(math.ceil(derivedlen / float(hLen)))
+    r = derivedlen - (l - 1) * hLen
+    def F(P, S, c, i):
+        U_prev = hmacfunc(P, S + struct.pack('>L', i))
+        res = U_prev
+        for cc in xrange(2, c+1):
+            U_c = hmacfunc(P, U_prev)
+            res = xor_string(res, U_c)
+            U_prev = U_c
+        return res
+    tmp = ''
+    i = 1
+    while True:
+        tmp += F(password, salt, iterations, i)
+        if len(tmp) > derivedlen:
+            break
+        i += 1
+    return tmp[0:derivedlen]
+
+
+def setclip(text):
+    '''Set the clipboard.
+    '''
+    assert HAS_GTK
+
+    clipboard = gtk.clipboard_get()
+    clipboard.set_text(text)
+    clipboard.store()
+
+
+def main():
+    parser = optparse.OptionParser(usage='%prog [options] SITE')
+    parser.add_option('-L', '--length', action='store', dest='length',
+                      type='int', metavar='N', default=16,
+                      help='password length (default %default)')
+    parser.add_option('-s', '--simple', action='store_true', dest='simple',
+                      default=False, help='avoid special characters')
+    if HAS_GTK:
+        parser.add_option('-c', '--clipboard', action='store_true',
+                          default=False, help='write password to '
+                          'clipboard instead of stdout')
+    parser.add_option('--iterations', action='store', dest='iterations',
+                      type='int', metavar='N', default=1000,
+                      help='number of pkbdf2 iterations (default %default)')
+    parser.add_option('-r', '--raw', action='store_true', dest='raw',
+                      default=False,
+                      help='turn off mapping to printable characters')
+    options, args = parser.parse_args()
+
+    if not len(args) == 1:
+        parser.error('please give a site designator '
+                     '(such as "www.example.com" or "spamemail")')
+    site = args[0]
+
+    password = getpass.getpass()
+
+    gen_bytes = pbkdf2(hmac_sha1, password, site,
+                       options.iterations, options.length)
+
+    if options.raw:
+        generated = ' '.join(map(lambda c: c.encode('hex'), gen_bytes))
+    else:
+        generated = bytes_to_password(gen_bytes, options.simple)
+
+    if HAS_GTK and options.clipboard:
+        setclip(generated)
+    else:
+        print generated
+
+
+if __name__ == '__main__':
+    main()
