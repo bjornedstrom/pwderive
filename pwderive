@@ -155,7 +155,7 @@ def main():
                           'clipboard instead of stdout')
     parser.add_option('--iterations', action='store', dest='iterations',
                       type='int', metavar='N', default=1000,
-                      help='number of pkbdf2 iterations (default %default)')
+                      help='number of pbkdf2 iterations (default %default)')
     parser.add_option('-r', '--raw', action='store_true', dest='raw',
                       default=False,
                       help='turn off mapping to printable characters')
